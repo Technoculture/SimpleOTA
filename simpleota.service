@@ -1,0 +1,46 @@
+[Unit]
+Description=SimpleOTA Update Client
+Documentation=https://github.com/technoculture/simpleota
+After=network-online.target zenoh.service
+Wants=network-online.target
+ConditionPathExists=/etc/simpleota/config.json
+
+[Service]
+# Run as root (needed for partition operations)
+User=root
+Group=root
+
+# Execute the client
+ExecStart=/usr/bin/python3 -m simpleota.client
+ExecStartPre=/bin/mkdir -p /var/log/simpleota /run/simpleota
+ExecStartPost=/bin/sh -c '/usr/bin/systemd-notify --ready || true'
+
+# Mark successful boot (if needed) when system is operational
+ExecStartPost=/bin/sh -c '/usr/bin/python3 -m simpleota.mark_boot_success || true'
+
+# Restart configuration
+Type=notify
+WatchdogSec=30
+Restart=on-failure
+RestartSec=30
+
+# Security hardening
+ProtectSystem=strict
+ReadWritePaths=/var/log/simpleota /etc/simpleota /tmp /var/tmp /run/simpleota /dev /mnt
+PrivateTmp=true
+NoNewPrivileges=true
+
+# Resource limits using cgroups
+CPUWeight=100
+CPUQuota=20%
+MemoryHigh=200M
+MemoryMax=500M
+IOWeight=100
+TasksMax=100
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

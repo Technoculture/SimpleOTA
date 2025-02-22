@@ -6,6 +6,7 @@ EmbeddedUpdater - A RAUC-like software update system for Yocto-based embedded Li
 import os
 import sys
 import json
+from pathlib import Path
 import hashlib
 import tarfile
 import logging
@@ -21,7 +22,7 @@ from cryptography.hazmat.backends import default_backend
 class UpdateBundle:
     """Handles creation and verification of update bundles"""
     
-    def __init__(self, config_path='/etc/embedded_updater/config.json'):
+    def __init__(self, config_path:str ='/etc/embedded_updater/config.json'):
         """Initialize with config file path"""
         try:
             with open(config_path, 'r') as f:
@@ -183,7 +184,7 @@ class UpdateBundle:
 class UpdateClient:
     """Client that runs on the device to download and apply updates"""
     
-    def __init__(self, config_path='/etc/embedded_updater/config.json'):
+    def __init__(self, config_path:str ='/etc/embedded_updater/config.json'):
         """Initialize with config file path"""
         try:
             with open(config_path, 'r') as f:
@@ -382,7 +383,7 @@ class BootControl:
     """Handles boot control and U-Boot integration"""
     
     @staticmethod
-    def mark_boot_successful():
+    def mark_boot_successful() -> bool:
         """Mark the current boot as successful"""
         try:
             # Reset the boot counter
@@ -431,7 +432,7 @@ class BootControl:
             return False
 
 
-def generate_keys():
+def generate_keys(conf_dir: Path) -> None:
     """Generate signing and verification keys"""
     # Generate private key
     private_key = rsa.generate_private_key(
@@ -457,27 +458,29 @@ def generate_keys():
     )
     
     # Write to files
-    os.makedirs('/etc/embedded_updater', exist_ok=True)
+    os.makedirs(conf_dir, exist_ok=True)
     
-    with open('/etc/embedded_updater/private_key.pem', 'wb') as f:
+    private_key_path = conf_dir.joinpath("private_key.pem")
+    with open(private_key_path, 'wb') as f:
         f.write(private_pem)
     
-    with open('/etc/embedded_updater/public_key.pem', 'wb') as f:
+    public_key_path = conf_dir.joinpath("public_key.pem")
+    with open(public_key_path, 'wb') as f:
         f.write(public_pem)
     
-    os.chmod('/etc/embedded_updater/private_key.pem', 0o600)
-    os.chmod('/etc/embedded_updater/public_key.pem', 0o644)
+    os.chmod(conf_dir.joinpath("private_key.pem"), 0o600) # 0o600 is for read/write by owner only
+    os.chmod(conf_dir.joinpath("public_key.pem"), 0o644) # 0o644 is for read/write by owner, read by others
     
-    print("Keys generated at:")
-    print("  Private key: /etc/embedded_updater/private_key.pem")
-    print("  Public key: /etc/embedded_updater/public_key.pem")
+    logging.info("Keys generated at:")
+    logging.info(f"  Private key: {private_key_path}")
+    logging.info(f"  Public key: {public_key_path}")
 
 
 def main():
     """Main entry point"""
     parser = argparse.ArgumentParser(description="Embedded System Update Tool")
     subparsers = parser.add_subparsers(dest="command", help="Commands")
-    
+
     # Create bundle command
     create_parser = subparsers.add_parser("create", help="Create update bundle")
     create_parser.add_argument("--version", required=True, help="Version string")
@@ -485,51 +488,51 @@ def main():
     create_parser.add_argument("--file", action="append", nargs=2, metavar=("DEST", "SRC"),
                               help="File to include in bundle (can be used multiple times)")
     create_parser.add_argument("--upload", action="store_true", help="Upload to S3 after creation")
-    
+
     # Check for updates command
     subparsers.add_parser("check", help="Check for updates")
-    
+
     # Apply update command
     apply_parser = subparsers.add_parser("apply", help="Apply available update")
     apply_parser.add_argument("--bundle", help="Local bundle path (optional)")
-    
+
     # Boot success command
     subparsers.add_parser("boot-success", help="Mark boot as successful")
-    
+
     # Generate keys command
     subparsers.add_parser("generate-keys", help="Generate signing and verification keys")
-    
+
     args = parser.parse_args()
-    
+
     if args.command == "create":
         # Convert --file arguments to dictionary
         files = {}
         if args.file:
             for dest, src in args.file:
                 files[dest] = src
-        
-        updater = UpdateBundle()
+
+        updater = UpdateBundle(config_path=CONF_PATH)
         bundle_path = updater.create_bundle(args.version, files, args.output)
-        
+
         if args.upload:
             s3_path = updater.upload_to_s3(bundle_path, args.version)
-            print(f"Bundle uploaded to {s3_path}")
+            logging.info(f"Bundle uploaded to {s3_path}")
         else:
-            print(f"Bundle created at {bundle_path}")
-    
+            logging.info(f"Bundle created at {bundle_path}")
+
     elif args.command == "check":
-        client = UpdateClient()
+        client = UpdateClient(config_path=CONF_PATH)
         update_info = client.check_for_updates()
-        
+
         if update_info:
-            print(f"Update available: {update_info['latest_version']}")
-            print(f"Bundle path: {update_info['bundle_path']}")
+            logging.info(f"Update available: {update_info['latest_version']}")
+            logging.info(f"Bundle path: {update_info['bundle_path']}")
         else:
-            print("No updates available")
-    
+            logging.info("No updates available")
+
     elif args.command == "apply":
-        client = UpdateClient()
-        
+        client = UpdateClient(config_path=CONF_PATH)
+
         if args.bundle:
             # Use local bundle
             bundle_path = args.bundle
@@ -537,45 +540,68 @@ def main():
             # Check for updates and download
             update_info = client.check_for_updates()
             if not update_info:
-                print("No updates available")
+                logging.info("No updates available")
                 return 0
-                
+
             bundle_path = client.download_update(update_info)
-        
+
         bundle_dir, metadata = client.verify_bundle(bundle_path)
         if not bundle_dir:
-            print("Bundle verification failed")
+            logging.info("Bundle verification failed")
             return 1
-            
+
         success = client.apply_update(bundle_dir, metadata)
         if success:
-            print("Update applied successfully. Reboot to apply.")
+            logging.info("Update applied successfully. Reboot to apply.")
             return 0
         else:
-            print("Update failed")
+            logging.error("Update failed")
             return 1
-    
+
     elif args.command == "boot-success":
         success = BootControl.mark_boot_successful()
         if success:
-            print("Boot marked as successful")
+            logging.info("Boot marked as successful")
             return 0
         else:
-            print("Failed to mark boot as successful")
+            logging.error("Failed to mark boot as successful")
             return 1
-    
+
     elif args.command == "generate-keys":
-        generate_keys()
-    
+        generate_keys(conf_dir=Path(CONF_DIR))
+
     else:
         parser.print_help()
 
 
+def check_required_permissions():
+    """
+    Check if script is running as root. Along with permissions to write to /var/log,
+    this script also requires access to fw_printenv and fw_setenv.
+    """
+    if os.geteuid() != 0:
+        print("""
+This script requires root privileges to run. Please re-run with sudo.
+
+If you are running this script on a device with U-Boot, make sure that the
+'fw_printenv' and 'fw_setenv' commands are available. These are typically
+provided by the U-Boot tools package in Yocto.
+""")
+        sys.exit(1)
+
+
 if __name__ == "__main__":
+    check_required_permissions()
+
     # If user has permission to write to /var/log, use it, otherwise use the current directory
-    LOG_DIR = "/var/log/" if os.access("/var/log/", os.W_OK) else os.getcwd()
+    LOG_DIR = "/var/log/" if os.access("/var/log/", os.W_OK) else os.getcwd() + "/.logs"
+    os.makedirs(LOG_DIR, exist_ok=True)
     LOG_PATH = os.path.join(LOG_DIR, "embedded_updater.log")
     # print("Logging to", LOG_PATH)
+
+    CONF_DIR = "/etc/embedded_updater" if os.access("/etc/embedded_updater", os.W_OK) else os.getcwd() + "/.conf"
+    os.makedirs(CONF_DIR, exist_ok=True)
+    CONF_PATH = os.path.join(CONF_DIR, "config.json")
 
     # Set up logging
     logging.basicConfig(level=logging.INFO, 
