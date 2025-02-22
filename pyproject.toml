@@ -1,0 +1,10 @@
+[project]
+name = "simpleota"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "boto3>=1.36.26",
+    "cryptography>=44.0.1",
+]
