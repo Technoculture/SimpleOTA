@@ -1,0 +1,18 @@
+# Udev rules for SimpleOTA
+# Copyright (c) 2025 Technoculture Research
+# SPDX-License-Identifier: MIT
+
+# Automatically give the simpleota process access to MMC block devices
+SUBSYSTEM=="block", KERNEL=="mmcblk[0-9]p[0-9]", TAG+="simpleota-update"
+
+# Allow SimpleOTA to access and update bootloader environment
+KERNEL=="ubi_ctrl", TAG+="simpleota-update"
+KERNEL=="ubi[0-9]*", TAG+="simpleota-update"
+KERNEL=="mtd[0-9]*", TAG+="simpleota-update"
+
+# Give SimpleOTA access to U-Boot environment in raw partition
+SUBSYSTEM=="block", KERNEL=="mmcblk[0-9]", TAG+="simpleota-update"
+
+# Device-specific permissions based on your hardware
+# Example for i.MX8 boards:
+SUBSYSTEM=="i2c-dev", TAG+="simpleota-update"
